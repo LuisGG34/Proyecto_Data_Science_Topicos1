@@ -1,0 +1,17 @@
+[Unit]
+Description=CryptoPulse Analytics - Streamlit dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/cryptopulse
+Environment=DATA_SOURCE=s3
+Environment=CRYPTOPULSE_S3_BUCKET=REEMPLAZA-CON-TU-BUCKET
+ExecStart=/home/ec2-user/cryptopulse/venv/bin/streamlit run dashboard/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=CryptoPulse - ingesta en vivo + transformacion de KPIs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/cryptopulse/data_pipeline
+Environment=CRYPTOPULSE_S3_BUCKET=REEMPLAZA-CON-TU-BUCKET
+ExecStart=/home/ec2-user/cryptopulse/venv/bin/python ingest_live.py --upload-s3
+ExecStartPost=/home/ec2-user/cryptopulse/venv/bin/python backfill_recent.py --upload-s3
+ExecStartPost=/home/ec2-user/cryptopulse/venv/bin/python transform.py --upload-s3

@@ -1,0 +1,69 @@
+Trabajo recuperativo
+Trabajo recuperativo.
+
+Este trabajo lo pueden realizar estudiantes que deseen subir su calificación actual. Lo pueden realizar en grupos o de manera individual. La calificación de este trabajo cuenta como examen de repetición.
+
+
+Fecha de entrega: hasta el 9 de Agosto.
+
+
+Objetivo
+
+Diseñar una solución de analítica y visualización de datos, demostrando con evidencia como imágenes, videos u otro material, su correcta implementación y desarrollo.
+
+
+Consideraciones
+
+Se evaluarán solo trabajos que realmente demuestren su correcta implementación. Si algún trabajo no demuestra a través de evidencias que se implemento se considerará la misma nota obtenida durante el curso.
+De no contar con datos, estos pueden ser generados de manera sintética o utilizar datos de bases de datos públicas.
+La arquitectura puede ser desplegada en la nube, de manera local o en cualquier plataforma de su comodidad. Para cada servicio seleccionado se debe justificar brevemente su elección. Se recomienda utilizar la capa gratuita (Free Tier) de servicios en la nube, de utilizar este tipo de servicios.
+Se permite el uso de herramientas de IA generativa como apoyo al desarrollo.
+El caso de negocio debe ser original.
+
+Proyecto
+
+Contexto y problema de negocio. Preguntas de negocio que el dashboard permitirá responder.
+
+Definir claramente:
+
+Organización o industria analizada.
+Problema o necesidad de negocio.
+Usuarios o stakeholders del dashboard.
+
+KPIs y métricas
+
+Definir al menos 3 KPIs relevantes indicando:
+Nombre del KPI.
+Fuente de datos.
+Frecuencia de actualización.
+Valor objetivo o benchmark (si aplica).
+
+Pipeline de datos. Implementar un flujo de datos que considere:
+
+Ingesta.
+Almacenamiento.
+Transformación.
+Consumo por parte del dashboard.
+
+Diseñar una arquitectura de alto nivel que incluya:
+
+Ingesta de datos.
+Almacenamiento.
+Procesamiento.
+Visualización.
+
+Modelo de datos
+
+Fuentes de información.
+Formato de los datos.
+Frecuencia de actualización.
+Modelo conceptual de datos (entidades, relaciones y campos principales).
+
+Diseño del dashboard. Justificar la selección de los tipos de gráficos utilizados.
+
+Presentar un wireframe o prototipo que incluya:
+Indicadores principales.
+Gráficos.
+Filtros.
+Contar con visualizaciones funcionales.
+Incorporar filtros e interacción para el usuario.
