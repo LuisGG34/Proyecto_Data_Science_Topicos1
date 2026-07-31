@@ -1,0 +1,9 @@
+# Fija el tema base de Streamlit en vez de heredar el modo claro/oscuro del
+# SO/navegador del usuario. dashboard/app.py ya implementa su propio toggle
+# claro/oscuro (session_state["dark_mode"]) con una paleta validada para
+# daltonismo (ver informe/INFORME.md §5.2 y el CSS inyectado en app.py); sin
+# este archivo, un visitante con el navegador en modo oscuro heredaba los
+# colores de texto claros que la app fija por CSS, quedando texto oscuro
+# sobre fondo oscuro (issue de legibilidad reportado).
+[theme]
+base = "light"

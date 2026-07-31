@@ -34,6 +34,9 @@ Run the dashboard locally:
 streamlit run dashboard/app.py
 # http://localhost:8501
 ```
+On Windows, if `streamlit` isn't recognized (its Scripts folder often isn't
+on PATH for a per-user pip install), run it as a module instead:
+`python -m streamlit run dashboard/app.py`.
 
 `ingest_historical.py` and `transform.py` accept `--upload-s3` to push their
 outputs to the S3 bucket configured via `CRYPTOPULSE_S3_BUCKET` (see
@@ -108,6 +111,19 @@ scales). Per-asset colors are fixed (`COLORS` dict: BTC blue, ETH orange,
 SOL aqua) and must stay consistent with the same palette used in the
 architecture/wireframe artifact — don't let a filter change repaint a
 symbol's color.
+
+**Light/dark theme colors.** `dashboard/app.py` defines a `THEMES` dict
+(light/dark) with its own `text_primary`/`text_secondary`/`muted` grays,
+consumed by both the injected CSS and the Plotly chart traces (`MUTED`,
+`GRID`, etc.) — never hardcode a text color outside `THEME`, since a value
+tuned for one mode reads as illegible in the other. Each gray must be
+checked against *that mode's own background* (`page_bg`/`surface_bg`), not
+copy-pasted between modes: `muted` used to be the identical hex in both
+themes, which worked for dark (~5.9:1 against `#0d0d0d`) but gave only
+~3.4:1 in light mode against `#f9f9f7` — below the WCAG AA text minimum
+(4.5:1) — making secondary chart lines/labels hard to read on white. When
+tweaking `THEMES`, verify contrast against the background for that mode
+specifically (aim for >=4.5:1 for text-bearing colors).
 
 **Deployment.** `deploy/AWS_DEPLOY.md` is the authoritative, step-by-step
 AWS setup (S3 bucket, IAM role, EC2 launch, security group). The systemd

@@ -17,20 +17,104 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 # ---------------------------------------------------------------------------
-# Config / paleta (ver skill dataviz — colores categóricos fijos por activo)
+# Config / paleta (ver skill dataviz — colores categóricos fijos por activo,
+# validados para daltonismo con validate_palette.js; ver informe/INFORME.md
+# §5.2). Ambos modos (claro/oscuro) están en THEMES, tomados de la misma
+# paleta de referencia -- no son colores inventados por modo.
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="CryptoPulse Analytics", page_icon="📊", layout="wide")
 
-COLORS = {
-    "BTC": "#2a78d6",   # slot 1 - blue
-    "ETH": "#eb6834",   # slot 2 - orange
-    "SOL": "#1baf7a",   # slot 3 - aqua
+THEMES = {
+    "light": dict(
+        page_bg="#f9f9f7", surface_bg="#fcfcfb",
+        text_primary="#0b0b0b", text_secondary="#52514e", muted="#6b6960",
+        grid="#e1e0d9", border="rgba(11,11,11,0.14)",
+        colors={"BTC": "#2a78d6", "ETH": "#eb6834", "SOL": "#1baf7a"},  # slots 1/2/3
+        good="#0ca30c", bad="#d03b3b",
+        diverging=["#1c5cab", "#f0efec", "#d03b3b"],  # blue -> gray -> red
+        gap_color="rgba(120,120,120,0.18)", backfill_color="rgba(230,170,40,0.16)",
+        plotly_template="plotly_white",
+    ),
+    "dark": dict(
+        page_bg="#0d0d0d", surface_bg="#1a1a19",
+        text_primary="#ffffff", text_secondary="#c3c2b7", muted="#898781",
+        grid="#2c2c2a", border="rgba(255,255,255,0.16)",
+        colors={"BTC": "#3987e5", "ETH": "#d95926", "SOL": "#199e70"},  # mismos slots, paso oscuro
+        good="#0ca30c", bad="#d03b3b",  # paleta de estado: fija, no cambia por modo
+        diverging=["#3987e5", "#383835", "#e66767"],
+        gap_color="rgba(255,255,255,0.14)", backfill_color="rgba(230,170,40,0.24)",
+        plotly_template="plotly_dark",
+    ),
 }
-GOOD = "#0ca30c"
-BAD = "#d03b3b"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-DIVERGING = ["#1c5cab", "#f0efec", "#d03b3b"]  # blue -> gray -> red (correlación)
+
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+THEME = THEMES["dark" if st.session_state.dark_mode else "light"]
+
+COLORS = THEME["colors"]
+GOOD = THEME["good"]
+BAD = THEME["bad"]
+MUTED = THEME["muted"]
+GRID = THEME["grid"]
+DIVERGING = THEME["diverging"]  # blue -> gray -> red (correlación)
+
+# Los tamaños de fuente por defecto de Streamlit/Plotly son pequeños para un
+# dashboard pensado para leerse en una sala (comité de inversión); se agrandan
+# aquí en vez de por gráfico para que quede consistente en toda la app. Los
+# colores salen de THEME en vez de estar fijos, porque un valor de texto
+# hardcodeado para modo claro queda ilegible si el usuario cambia a modo
+# oscuro (o si el navegador fuerza su propio modo oscuro) -- ver
+# .streamlit/config.toml, que fija el tema base para que este toggle sea la
+# única fuente de verdad sobre claro/oscuro.
+st.markdown(
+    f"""
+    <style>
+    html, body, [class*="css"] {{ font-size: 17px; }}
+    [data-testid="stAppViewContainer"], [data-testid="stHeader"],
+    [data-testid="stBottomBlockContainer"], .main {{
+        background-color: {THEME['page_bg']} !important;
+    }}
+    [data-testid="stAppViewContainer"] p, [data-testid="stAppViewContainer"] span,
+    [data-testid="stAppViewContainer"] li, [data-testid="stAppViewContainer"] label,
+    [data-testid="stAppViewContainer"] div[data-testid="stMarkdownContainer"],
+    [data-baseweb="tag"] span, [data-baseweb="select"] *, [data-baseweb="menu"] *,
+    [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"],
+    [data-testid="stThumbValue"] {{
+        color: {THEME['text_primary']} !important;
+    }}
+    [data-testid="stCaptionContainer"] {{ opacity: 1 !important; }}
+    [data-testid="stCaptionContainer"] p,
+    [data-testid="stCaptionContainer"] span {{
+        font-size: 1rem !important; color: {THEME['text_secondary']} !important; opacity: 1 !important;
+    }}
+    [data-testid="stMetricValue"] {{ font-size: 2rem !important; color: {THEME['text_primary']} !important; }}
+    [data-testid="stMetricLabel"] {{ font-size: 1.05rem !important; color: {THEME['text_secondary']} !important; }}
+    [data-testid="stMetricDelta"] {{ font-size: 1.05rem !important; }}
+    .stMarkdown p, .stMarkdown li {{ font-size: 1.02rem; }}
+    [data-testid="stWidgetLabel"] p {{ font-size: 1.02rem !important; color: {THEME['text_primary']} !important; }}
+    h1, h2, h3, [data-testid="stHeading"] {{ color: {THEME['text_primary']} !important; }}
+    h1 {{ font-size: 2.1rem !important; }}
+    h2, [data-testid="stHeading"] h2 {{ font-size: 1.5rem !important; }}
+    h3 {{ font-size: 1.25rem !important; }}
+    hr {{ border-color: {THEME['border']} !important; }}
+    [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+    [data-testid="stSlider"] > div > div, [data-testid="stExpander"] {{
+        background-color: {THEME['surface_bg']} !important;
+        border-color: {THEME['border']} !important;
+    }}
+    [data-testid="stDataFrame"] {{ background-color: {THEME['surface_bg']} !important; }}
+    [data-testid="stElementToolbar"] {{ background-color: {THEME['surface_bg']} !important; }}
+    [data-testid="stElementToolbar"] button svg {{ fill: {THEME['text_primary']} !important; }}
+    [data-testid^="stBaseButton"] {{
+        background-color: {THEME['surface_bg']} !important;
+        color: {THEME['text_primary']} !important;
+        border-color: {THEME['border']} !important;
+    }}
+    [data-testid^="stBaseButton"] p {{ color: {THEME['text_primary']} !important; }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 DATA_SOURCE = os.environ.get("DATA_SOURCE", "local")  # "local" | "s3"
 S3_BUCKET = os.environ.get("CRYPTOPULSE_S3_BUCKET", "")
@@ -59,8 +143,9 @@ def load_data():
     return kpi_daily, kpi_latest
 
 
-GAP_COLOR = "rgba(120,120,120,0.18)"
-BACKFILL_COLOR = "rgba(230,170,40,0.14)"
+GAP_COLOR = THEME["gap_color"]
+BACKFILL_COLOR = THEME["backfill_color"]
+ANNOTATION_FONT_COLOR = THEME["text_primary"]
 
 
 def _contiguous_ranges(mask: pd.Series, dates: pd.Series):
@@ -88,8 +173,8 @@ def add_gap_shading(fig, dates: pd.Series, is_gap: pd.Series, row=1):
     for start, end in _contiguous_ranges(is_gap, dates):
         fig.add_vrect(
             x0=start, x1=end, fillcolor=GAP_COLOR, line_width=0,
-            annotation_text="Sin datos (fuente no disponible)", annotation_font_size=10,
-            annotation_position="top left", row=row, col=1,
+            annotation_text="Sin datos (fuente no disponible)", annotation_font_size=13,
+            annotation_font_color=ANNOTATION_FONT_COLOR, annotation_position="top left", row=row, col=1,
         )
 
 
@@ -105,7 +190,8 @@ def add_backfill_shading(fig, sdf: pd.DataFrame, row=1):
         fig.add_vrect(
             x0=start, x1=end, fillcolor=BACKFILL_COLOR, line_width=0,
             annotation_text="CoinGecko backfill: sin OHLC real (precio de cierre diario)",
-            annotation_font_size=10, annotation_position="top left", row=row, col=1,
+            annotation_font_size=13, annotation_font_color=ANNOTATION_FONT_COLOR,
+            annotation_position="top left", row=row, col=1,
         )
 
 
@@ -118,6 +204,31 @@ def format_minutes_ago(ts) -> str:
     if minutes < 60:
         return f"hace {minutes:.0f} min"
     return f"hace {minutes / 60:.1f} h"
+
+
+def render_stat_box(html: str):
+    """Muestra una línea de estadísticas (RSI/volatilidad/drawdown, ATR/ADX,
+    feed en vivo) en una caja con fondo y borde propios en vez de st.caption:
+    el color 'muted' de Streamlit para captions pasa el mínimo de contraste
+    WCAG en teoría, pero en la práctica se percibe apagado sobre el fondo de
+    página -- estos son datos que el usuario necesita leer al vuelo, no una
+    nota secundaria, así que van con texto oscuro/blanco (text_primary) y una
+    caja que los separa visualmente del resto de la tarjeta KPI."""
+    st.markdown(
+        f"""
+        <div style="
+            background-color:{THEME['surface_bg']};
+            border:1px solid {THEME['border']};
+            border-radius:8px;
+            padding:0.5rem 0.85rem;
+            margin:0.3rem 0 0.55rem 0;
+            color:{THEME['text_primary']};
+            font-size:1rem;
+            line-height:1.55;
+        ">{html}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def pct_real_ohlc(kpi_daily: pd.DataFrame, symbol: str) -> float:
@@ -141,12 +252,12 @@ def pct_real_ohlc(kpi_daily: pd.DataFrame, symbol: str) -> float:
 
 
 PLOTLY_LAYOUT = dict(
-    template="plotly_white",
-    font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color="#0b0b0b"),
-    plot_bgcolor="#fcfcfb",
-    paper_bgcolor="#fcfcfb",
+    template=THEME["plotly_template"],
+    font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=THEME["text_primary"], size=15),
+    plot_bgcolor=THEME["surface_bg"],
+    paper_bgcolor=THEME["surface_bg"],
     margin=dict(l=10, r=10, t=40, b=10),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=14)),
     hovermode="x unified",
 )
 
@@ -169,11 +280,21 @@ ALL_SYMBOLS = sorted(kpi_daily["symbol"].unique().tolist())
 # ---------------------------------------------------------------------------
 # Encabezado + filtros (una fila, arriba de los gráficos)
 # ---------------------------------------------------------------------------
-st.title("📊 CryptoPulse Analytics")
-st.caption(
-    "Monitoreo de precio, riesgo y momentum de BTC, ETH y SOL para el comité de inversión — "
-    "datos históricos (Hugging Face) + feed en vivo (CoinGecko)."
-)
+title_col, theme_col = st.columns([6, 1])
+with title_col:
+    st.title("📊 CryptoPulse Analytics")
+    st.caption(
+        "Monitoreo de precio, riesgo y momentum de BTC, ETH y SOL para el comité de inversión — "
+        "datos históricos (Hugging Face) + feed en vivo (CoinGecko)."
+    )
+with theme_col:
+    # Vinculado a session_state["dark_mode"], leído arriba antes de fijar
+    # THEME/COLORS/PLOTLY_LAYOUT -- al cambiarlo Streamlit vuelve a correr
+    # el script desde el principio con el nuevo valor ya en session_state.
+    # La etiqueta muestra el modo activo (no una instrucción fija), así el
+    # ícono/texto siempre describe el estado actual del toggle.
+    toggle_label = "🌙 Oscuro" if st.session_state.dark_mode else "☀️ Claro"
+    st.toggle(toggle_label, key="dark_mode", help="Cambia el dashboard entre tema claro y oscuro")
 
 f1, f2, f3 = st.columns([2, 3, 2])
 with f1:
@@ -233,17 +354,18 @@ for col, symbol in zip(kpi_cols, selected):
             value=f"${price:,.2f}",
             delta=f"{chg:+.2f}% 24h",
         )
-        st.caption(
-            f"RSI(14): **{hist_last['RSI']:.1f}**  ·  "
-            f"Volatilidad 30d (anualizada): **{hist_last['volatility_30d']*100:.1f}%**  ·  "
-            f"Máx. drawdown: **{hist_last['max_drawdown_to_date']*100:.1f}%**"
-            + (f"  ·  Dominancia mkt cap: **{dom:.1f}%**" if pd.notna(dom) else "")
+        render_stat_box(
+            f"RSI(14): <b>{hist_last['RSI']:.1f}</b>  ·  "
+            f"Volatilidad 30d (anualizada): <b>{hist_last['volatility_30d']*100:.1f}%</b>  ·  "
+            f"Máx. drawdown: <b>{hist_last['max_drawdown_to_date']*100:.1f}%</b>"
+            + (f"  ·  Dominancia mkt cap: <b>{dom:.1f}%</b>" if pd.notna(dom) else "")
         )
-        st.caption(
-            f"ATR(14): **${hist_last['ATR']:,.2f}** (referencia para dimensionar stops) · "
-            f"ADX(14): **{hist_last['ADX']:.1f}** ({'tendencia fuerte' if hist_last['ADX'] >= 25 else 'sin tendencia clara'})"
+        render_stat_box(
+            f"ATR(14): <b>${hist_last['ATR']:,.2f}</b> (referencia para dimensionar stops) · "
+            f"ADX(14): <b>{hist_last['ADX']:.1f}</b> "
+            f"({'tendencia fuerte' if hist_last['ADX'] >= 25 else 'sin tendencia clara'})"
         )
-        st.caption(
+        render_stat_box(
             f"🕒 Feed en vivo: {format_minutes_ago(fetched_at)}  ·  "
             f"📊 Historial con OHLC real: {pct_real_ohlc(kpi_daily, symbol):.0f}%"
         )
@@ -273,7 +395,13 @@ if len(selected) == 1:
     fig.add_trace(
         go.Candlestick(
             x=sdf["date"], open=sdf["open"], high=sdf["high"], low=sdf["low"], close=sdf["close"],
-            increasing_line_color=GOOD, decreasing_line_color=BAD, name=symbol, showlegend=False,
+            # Verde/rojo es el estándar financiero, pero es el peor caso para
+            # daltonismo rojo-verde (protanopia/deuteranopia): además del color,
+            # las velas alcistas quedan huecas (fillcolor = fondo) y las
+            # bajistas sólidas, así la dirección también se lee por forma.
+            increasing=dict(line_color=GOOD, fillcolor=THEME["surface_bg"]),
+            decreasing=dict(line_color=BAD, fillcolor=BAD),
+            name=symbol, showlegend=False,
         ),
         row=1, col=1,
     )
@@ -295,8 +423,12 @@ if len(selected) == 1:
                               name="RSI", showlegend=False), row=3, col=1)
     fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["ADX"], line=dict(color=MUTED, width=1.5, dash="dot"),
                               name="ADX", showlegend=False), row=3, col=1)
-    fig.add_hline(y=70, line=dict(color=BAD, width=1, dash="dot"), row=3, col=1)
-    fig.add_hline(y=30, line=dict(color=GOOD, width=1, dash="dot"), row=3, col=1)
+    fig.add_hline(y=70, line=dict(color=BAD, width=1, dash="dot"),
+                  annotation_text="Sobrecompra (70)", annotation_font_size=11,
+                  annotation_font_color=ANNOTATION_FONT_COLOR, annotation_position="top right", row=3, col=1)
+    fig.add_hline(y=30, line=dict(color=GOOD, width=1, dash="dot"),
+                  annotation_text="Sobreventa (30)", annotation_font_size=11,
+                  annotation_font_color=ANNOTATION_FONT_COLOR, annotation_position="bottom right", row=3, col=1)
     fig.add_hline(y=25, line=dict(color=MUTED, width=1, dash="dot"), row=3, col=1)  # ADX >= 25: tendencia fuerte
 
     macd_hist = sdf["MACD"] - sdf["Signal"]
@@ -312,6 +444,7 @@ if len(selected) == 1:
     add_gap_shading(fig, sdf["date"], sdf["close"].isna(), row=1)
 
     fig.update_layout(height=940, xaxis4_rangeslider_visible=False, xaxis_rangeslider_visible=False, **PLOTLY_LAYOUT)
+    fig.update_xaxes(gridcolor=GRID)
     fig.update_yaxes(gridcolor=GRID, row=1, col=1)
     fig.update_yaxes(gridcolor=GRID, row=2, col=1)
     fig.update_yaxes(gridcolor=GRID, range=[0, 100], row=3, col=1)
@@ -340,6 +473,7 @@ else:
     add_gap_shading(fig, close_pivot.index.to_series().reset_index(drop=True), shared_gap, row=1)
 
     fig.update_layout(height=420, yaxis_title="Índice (inicio del rango = 100)", **PLOTLY_LAYOUT)
+    fig.update_xaxes(gridcolor=GRID)
     fig.update_yaxes(gridcolor=GRID)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -351,6 +485,7 @@ else:
             sdf = df[df["symbol"] == symbol].sort_values("date")
             vol_fig.add_trace(go.Bar(x=sdf["date"], y=sdf["volume"], name=symbol, marker_color=COLORS.get(symbol)))
         vol_fig.update_layout(height=360, barmode="group", **PLOTLY_LAYOUT)
+        vol_fig.update_xaxes(gridcolor=GRID)
         vol_fig.update_yaxes(gridcolor=GRID)
         st.plotly_chart(vol_fig, use_container_width=True)
 
@@ -362,7 +497,7 @@ else:
             data=go.Heatmap(
                 z=corr.values, x=corr.columns, y=corr.columns, zmin=-1, zmax=1,
                 colorscale=[[0, DIVERGING[0]], [0.5, DIVERGING[1]], [1, DIVERGING[2]]],
-                text=np.round(corr.values, 2), texttemplate="%{text}",
+                text=np.round(corr.values, 2), texttemplate="%{text}", textfont=dict(size=15),
                 colorbar=dict(title="ρ"),
             )
         )
@@ -382,11 +517,20 @@ for symbol in selected:
     ret_fig.add_trace(go.Scatter(x=sdf["date"], y=cum * 100, name=symbol, line=dict(color=COLORS.get(symbol), width=2)))
 ret_fig.add_hline(y=0, line=dict(color=MUTED, width=1))
 ret_fig.update_layout(height=320, yaxis_title="Retorno acumulado (%)", **PLOTLY_LAYOUT)
+ret_fig.update_xaxes(gridcolor=GRID)
 ret_fig.update_yaxes(gridcolor=GRID)
 st.plotly_chart(ret_fig, use_container_width=True)
 
 with st.expander("Ver / descargar datos filtrados"):
-    st.dataframe(df.sort_values(["symbol", "date"], ascending=[True, False]), use_container_width=True)
+    # El grid interactivo de st.dataframe se dibuja en canvas con la paleta
+    # clara fija de .streamlit/config.toml (theme.base="light"), así que el
+    # toggle oscuro no lo alcanza por CSS solo -- por eso se fuerza el color
+    # de celda vía Styler, que sí traduce a overrides de celda en el grid.
+    display_df = df.sort_values(["symbol", "date"], ascending=[True, False])
+    styled_df = display_df.style.set_properties(
+        **{"background-color": THEME["surface_bg"], "color": THEME["text_primary"]}
+    )
+    st.dataframe(styled_df, use_container_width=True)
     st.download_button(
         "Descargar CSV",
         df.to_csv(index=False).encode("utf-8"),

@@ -187,6 +187,29 @@ El dashboard está implementado y funcional en `dashboard/app.py` (Streamlit +
 Plotly), y corre tanto localmente (`streamlit run dashboard/app.py`) como
 desplegado en la instancia EC2 (ver [`deploy/AWS_DEPLOY.md`](../deploy/AWS_DEPLOY.md)).
 
+### 5.5 Accesibilidad: legibilidad, tema claro/oscuro y daltonismo
+
+`dashboard/app.py` fija el tema base de Streamlit en `.streamlit/config.toml`
+(`base = "light"`) y define su propio par de temas en `THEMES` (claro/oscuro),
+seleccionable con el toggle "🌙 Oscuro" junto al título. Antes de esto, el CSS
+inyectado fijaba colores de texto claros sin depender del tema de Streamlit;
+si el navegador del usuario forzaba modo oscuro (heredado del SO), ese texto
+quedaba oscuro sobre fondo oscuro — de ahí el reporte de baja legibilidad.
+Fijar el tema base y mover todos los colores (fondo, texto, grilla, series,
+sombreado de huecos/backfill) a `THEMES` deja el toggle in-app como única
+fuente de verdad sobre claro/oscuro, en vez de heredar una preferencia del
+sistema que el resto de la app no seguía.
+
+Ambos temas reutilizan la misma paleta categórica ya validada para daltonismo
+(BTC azul, ETH naranja, SOL aqua — ver §5.2), en su paso claro y su paso
+oscuro; los colores de estado (`good`/`bad`, verde/rojo) son fijos entre
+temas por diseño. El caso rojo/verde de las velas (candlestick) es el peor
+escenario para daltonismo rojo-verde (protanopia/deuteranopia): además del
+color, las velas alcistas quedan huecas (relleno = color de fondo) y las
+bajistas sólidas, así la dirección se lee por forma incluso si el color no se
+distingue. Las líneas de referencia de sobrecompra/sobreventa del RSI (70/30)
+suman una etiqueta de texto, por la misma razón.
+
 ---
 
 ## 6. Consideraciones del enunciado — cómo se cumplen
