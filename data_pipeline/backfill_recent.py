@@ -51,6 +51,32 @@ def fetch_recent_daily(coingecko_id: str, days: int = 365) -> pd.DataFrame:
     return df[["date", "open", "high", "low", "close", "volume", "source"]]
 
 
+def detect_uncovered_gap(symbol: str, recent_start) -> None:
+    """Avisa si queda un tramo sin cubrir entre el corte del histórico de
+    Hugging Face (data/processed/<symbol>_daily.parquet) y el inicio de este
+    backfill. CoinGecko free tier rechaza pedir historia más allá de 365 días
+    hacia atrás (confirmado: /market_chart y /history responden 401
+    "exceeds the allowed time range" para fechas más antiguas), así que ese
+    hueco no se puede cerrar pidiendo más días aquí -- sólo detectarlo. Al no
+    quedar cubierto por ninguna fuente, transform.py debe dejarlo como NaN
+    explícito al fusionar, en vez de conectar los precios de antes/después
+    del hueco con una línea recta."""
+    hf_path = PROCESSED_DIR / f"{symbol}_daily.parquet"
+    if not hf_path.exists():
+        return
+    hf_max = pd.read_parquet(hf_path, columns=["date"])["date"].max()
+    gap_days = (recent_start - hf_max).days - 1
+    if gap_days > 0:
+        log.warning(
+            "%s: hueco de %d día(s) sin dato real entre el corte de Hugging Face (%s) "
+            "y el inicio del backfill de CoinGecko (%s). El plan gratuito de CoinGecko "
+            "no permite pedir historia más allá de 365 días hacia atrás, así que este "
+            "tramo no se puede cerrar desde aquí -- verifica que transform.py lo esté "
+            "marcando como NaN explícito en vez de interpolarlo.",
+            symbol, gap_days, hf_max.date(), recent_start.date(),
+        )
+
+
 def upload_to_s3(paths):
     import boto3
 
@@ -70,6 +96,7 @@ def main(upload_s3: bool = False):
         except Exception as exc:  # noqa: BLE001
             log.error("Fallo al obtener backfill de %s: %s", symbol, exc)
             continue
+        detect_uncovered_gap(symbol, recent["date"].min())
         recent.insert(0, "symbol", symbol)
         out_path = PROCESSED_DIR / f"{symbol}_recent.parquet"
         recent.to_parquet(out_path, index=False)

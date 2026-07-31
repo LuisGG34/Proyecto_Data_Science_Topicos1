@@ -31,6 +31,27 @@ KPI_LATEST_PATH = PROCESSED_DIR / "kpi_latest.csv"
 OHLCV_COLS = ["symbol", "date", "open", "high", "low", "close", "volume"]
 
 
+def reindex_full_calendar(combined: pd.DataFrame) -> pd.DataFrame:
+    """Reindexa cada symbol a calendario diario completo (entre su primera y
+    última fecha), insertando filas NaN explícitas en los días sin dato de
+    ninguna fuente -- p. ej. el tramo entre el corte de Hugging Face y el
+    límite de 365 días del plan gratuito de CoinGecko (ver
+    backfill_recent.py:detect_uncovered_gap). Sin esto ese hueco queda
+    invisible: el dashboard dibuja una línea recta entre el último precio
+    antes del hueco y el primero después, y los indicadores rolling
+    (MA/RSI/volatility) mezclan ambos lados como si fueran días consecutivos."""
+    other_cols = [c for c in combined.columns if c not in ("symbol", "date")]
+    out = []
+    for symbol, g in combined.groupby("symbol"):
+        g = g.set_index("date").sort_index()
+        full_idx = pd.date_range(g.index.min(), g.index.max(), freq="D")
+        g = g.reindex(full_idx)
+        g.index.name = "date"
+        g["symbol"] = symbol
+        out.append(g.reset_index())
+    return pd.concat(out, ignore_index=True)[["symbol", "date"] + other_cols]
+
+
 def merge_hf_and_backfill(hf_daily: pd.DataFrame) -> pd.DataFrame:
     """Combina el histórico de Hugging Face (OHLCV real, hasta ~marzo 2025)
     con el backfill diario de CoinGecko (último año, ver backfill_recent.py).
@@ -38,12 +59,14 @@ def merge_hf_and_backfill(hf_daily: pd.DataFrame) -> pd.DataFrame:
     hf = hf_daily[OHLCV_COLS].copy()
     if not RECENT_PATH.exists():
         log.warning("No existe %s; corre backfill_recent.py para extender el histórico reciente", RECENT_PATH)
-        return hf.sort_values(["symbol", "date"])
+        combined = hf.sort_values(["symbol", "date"]).reset_index(drop=True)
+    else:
+        recent = pd.read_parquet(RECENT_PATH)[OHLCV_COLS]
+        combined = pd.concat([hf, recent], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["symbol", "date"], keep="first")
+        combined = combined.sort_values(["symbol", "date"]).reset_index(drop=True)
 
-    recent = pd.read_parquet(RECENT_PATH)[OHLCV_COLS]
-    combined = pd.concat([hf, recent], ignore_index=True)
-    combined = combined.drop_duplicates(subset=["symbol", "date"], keep="first")
-    return combined.sort_values(["symbol", "date"]).reset_index(drop=True)
+    return reindex_full_calendar(combined)
 
 
 def compute_technical_indicators(g: pd.DataFrame) -> pd.DataFrame:
@@ -64,7 +87,58 @@ def compute_technical_indicators(g: pd.DataFrame) -> pd.DataFrame:
     avg_loss = loss.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
     g["RSI"] = 100 - (100 / (1 + rs))
-    g["RSI"] = g["RSI"].fillna(50)  # sin suficiente historia todavía: neutral
+    # A diferencia de .rolling(), .ewm() no propaga NaN cuando el input es
+    # NaN: "congela" el último valor calculado. Sin esto, el RSI se queda
+    # pegado en su última lectura real durante todo un hueco de datos (ver
+    # reindex_full_calendar) -- incluyendo el primer día real al volver del
+    # hueco, donde delta ya es NaN porque el cierre anterior no existe.
+    g.loc[delta.isna(), "RSI"] = np.nan
+    # Sólo rellena el arranque en frío (antes del primer valor real, sin
+    # suficiente historia todavía): neutral. Un NaN a mitad de serie es un
+    # hueco de datos real y debe seguir NaN, no taparse con una línea plana
+    # en 50.
+    first_valid = g["RSI"].first_valid_index()
+    if first_valid is not None:
+        g.loc[:first_valid, "RSI"] = g.loc[:first_valid, "RSI"].fillna(50)
+
+    # MACD (12/26/9 estándar). Igual que RSI, .ewm() congela el EMA durante
+    # un hueco en vez de propagar NaN, así que se enmascara con la misma
+    # condición (delta.isna() cubre todo el hueco + el primer día real al
+    # volver, que es donde el EMA congelado se mezclaría con el precio nuevo).
+    ema_12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
+    ema_26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
+    g["MACD"] = ema_12 - ema_26
+    g["Signal"] = g["MACD"].ewm(span=9, adjust=False, min_periods=9).mean()
+    g.loc[delta.isna(), ["MACD", "Signal"]] = np.nan
+
+    # ATR (14, suavizado de Wilder) sobre el rango verdadero (True Range).
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [g["high"] - g["low"], (g["high"] - prev_close).abs(), (g["low"] - prev_close).abs()], axis=1
+    ).max(axis=1)
+    g["ATR"] = true_range.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    g.loc[delta.isna(), "ATR"] = np.nan
+
+    # ADX (14, Wilder) -- fuerza de tendencia a partir de +DI/-DI.
+    high_diff = g["high"].diff()
+    low_diff = g["low"].diff()
+    invalid_dm = high_diff.isna() | low_diff.isna()
+    up_move, down_move = high_diff, -low_diff
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=g.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=g.index)
+    # np.where con NaN evalúa la comparación como False y devuelve 0.0 en vez
+    # de NaN -- sin esto, el hueco de datos se leería como "134 días de
+    # movimiento direccional cero" real en vez de "sin dato", contaminando el
+    # EMA de ADX mucho más que un simple congelamiento.
+    plus_dm[invalid_dm] = np.nan
+    minus_dm[invalid_dm] = np.nan
+    atr_adx = true_range.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / atr_adx
+    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / atr_adx
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    g["ADX"] = dx.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    g.loc[delta.isna(), "ADX"] = np.nan
+
     return g
 
 
@@ -74,7 +148,11 @@ def compute_daily_kpis(daily: pd.DataFrame) -> pd.DataFrame:
     for symbol, g in daily.groupby("symbol"):
         g = g.sort_values("date").reset_index(drop=True)
         g = compute_technical_indicators(g)
-        g["daily_return"] = g["close"].pct_change()
+        # fill_method=None: pandas por defecto rellena (pad) los NaN antes de
+        # calcular el % de cambio, lo que reintroduciría el salto del hueco
+        # de datos (ver reindex_full_calendar) como si fuera el retorno de
+        # un solo día real.
+        g["daily_return"] = g["close"].pct_change(fill_method=None)
         g["cumulative_return"] = (1 + g["daily_return"].fillna(0)).cumprod() - 1
         g["volatility_30d"] = g["daily_return"].rolling(30, min_periods=5).std() * np.sqrt(365)
         running_max = g["close"].cummax()

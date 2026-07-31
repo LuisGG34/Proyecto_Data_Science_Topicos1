@@ -37,6 +37,9 @@ S3_BUCKET = os.environ.get("CRYPTOPULSE_S3_BUCKET", "")
 LOCAL_PROCESSED = Path(__file__).resolve().parent.parent / "data" / "processed"
 
 REFRESH_SECONDS = 300  # refresco del feed en vivo (coherente con LIVE_POLL_MINUTES=15 -> cache 5 min)
+LIVE_STALE_MINUTES = 30  # 2x LIVE_POLL_MINUTES (config.py): margen antes de avisar que
+# ingest_live.py dejó de correr en EC2, en vez de mostrar un precio desactualizado como si
+# fuera fresco
 
 
 def _path(name: str) -> str:
@@ -54,6 +57,87 @@ def load_data():
     except FileNotFoundError:
         kpi_latest = pd.DataFrame()
     return kpi_daily, kpi_latest
+
+
+GAP_COLOR = "rgba(120,120,120,0.18)"
+BACKFILL_COLOR = "rgba(230,170,40,0.14)"
+
+
+def _contiguous_ranges(mask: pd.Series, dates: pd.Series):
+    """Devuelve [(inicio, fin), ...] para cada bloque contiguo de True en
+    `mask`, alineado a `dates` (ambas ya ordenadas por fecha)."""
+    ranges = []
+    in_block = False
+    start = prev_date = None
+    for is_true, d in zip(mask, dates):
+        if is_true and not in_block:
+            start, in_block = d, True
+        elif not is_true and in_block:
+            ranges.append((start, prev_date))
+            in_block = False
+        prev_date = d
+    if in_block:
+        ranges.append((start, prev_date))
+    return ranges
+
+
+def add_gap_shading(fig, dates: pd.Series, is_gap: pd.Series, row=1):
+    """Sombrea tramos sin dato de ninguna fuente (ver reindex_full_calendar
+    en transform.py) para que una línea/vela cortada se lea como "sin datos"
+    y no como un movimiento de mercado real."""
+    for start, end in _contiguous_ranges(is_gap, dates):
+        fig.add_vrect(
+            x0=start, x1=end, fillcolor=GAP_COLOR, line_width=0,
+            annotation_text="Sin datos (fuente no disponible)", annotation_font_size=10,
+            annotation_position="top left", row=row, col=1,
+        )
+
+
+def add_backfill_shading(fig, sdf: pd.DataFrame, row=1):
+    """Sombrea el tramo de backfill de CoinGecko, donde open == high == low
+    == close porque la fuente sólo entrega un precio de cierre por día (no
+    OHLC real) -- ver backfill_recent.py."""
+    is_backfill = (
+        sdf["close"].notna()
+        & (sdf["open"] == sdf["high"]) & (sdf["high"] == sdf["low"]) & (sdf["low"] == sdf["close"])
+    )
+    for start, end in _contiguous_ranges(is_backfill, sdf["date"]):
+        fig.add_vrect(
+            x0=start, x1=end, fillcolor=BACKFILL_COLOR, line_width=0,
+            annotation_text="CoinGecko backfill: sin OHLC real (precio de cierre diario)",
+            annotation_font_size=10, annotation_position="top left", row=row, col=1,
+        )
+
+
+def format_minutes_ago(ts) -> str:
+    if pd.isna(ts):
+        return "sin dato"
+    minutes = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60
+    if minutes < 1:
+        return "hace instantes"
+    if minutes < 60:
+        return f"hace {minutes:.0f} min"
+    return f"hace {minutes / 60:.1f} h"
+
+
+def pct_real_ohlc(kpi_daily: pd.DataFrame, symbol: str) -> float:
+    """% del historial del activo con OHLC real (Hugging Face), sobre los
+    días en los que existe algún dato -- excluye del cálculo los huecos sin
+    ninguna fuente (ver reindex_full_calendar en transform.py). El resto es
+    backfill de CoinGecko (open == high == low == close, un solo precio de
+    cierre por día)."""
+    sym_hist = kpi_daily[kpi_daily["symbol"] == symbol]
+    has_data = sym_hist["close"].notna()
+    n_data = has_data.sum()
+    if n_data == 0:
+        return float("nan")
+    is_backfill = (
+        has_data
+        & (sym_hist["open"] == sym_hist["high"])
+        & (sym_hist["high"] == sym_hist["low"])
+        & (sym_hist["low"] == sym_hist["close"])
+    )
+    return (n_data - is_backfill.sum()) / n_data * 100
 
 
 PLOTLY_LAYOUT = dict(
@@ -119,17 +203,29 @@ df = kpi_daily.loc[mask].copy()
 st.subheader("Indicadores clave")
 kpi_cols = st.columns(len(selected))
 for col, symbol in zip(kpi_cols, selected):
-    hist_last = df[df["symbol"] == symbol].sort_values("date").iloc[-1]
+    sym_df = df[(df["symbol"] == symbol) & df["close"].notna()].sort_values("date")
+    if sym_df.empty:
+        with col:
+            st.warning(f"{symbol}: sin datos reales en el rango de fechas filtrado.")
+        continue
+    hist_last = sym_df.iloc[-1]
     live_row = kpi_latest[kpi_latest["symbol"] == symbol] if not kpi_latest.empty else pd.DataFrame()
 
     if not live_row.empty:
         price = live_row["price_usd"].iloc[0]
         chg = live_row["pct_change_24h"].iloc[0]
         dom = live_row["market_cap_dominance_pct"].iloc[0]
+        fetched_at = pd.to_datetime(live_row["fetched_at"].iloc[0], utc=True, errors="coerce")
     else:
         price = hist_last["close"]
         chg = hist_last["daily_return"] * 100
         dom = np.nan
+        fetched_at = pd.NaT
+
+    minutes_since_fetch = (
+        (pd.Timestamp.now(tz="UTC") - fetched_at).total_seconds() / 60 if pd.notna(fetched_at) else None
+    )
+    is_stale = minutes_since_fetch is not None and minutes_since_fetch > LIVE_STALE_MINUTES
 
     with col:
         st.metric(
@@ -143,6 +239,21 @@ for col, symbol in zip(kpi_cols, selected):
             f"Máx. drawdown: **{hist_last['max_drawdown_to_date']*100:.1f}%**"
             + (f"  ·  Dominancia mkt cap: **{dom:.1f}%**" if pd.notna(dom) else "")
         )
+        st.caption(
+            f"ATR(14): **${hist_last['ATR']:,.2f}** (referencia para dimensionar stops) · "
+            f"ADX(14): **{hist_last['ADX']:.1f}** ({'tendencia fuerte' if hist_last['ADX'] >= 25 else 'sin tendencia clara'})"
+        )
+        st.caption(
+            f"🕒 Feed en vivo: {format_minutes_ago(fetched_at)}  ·  "
+            f"📊 Historial con OHLC real: {pct_real_ohlc(kpi_daily, symbol):.0f}%"
+        )
+        if fetched_at is pd.NaT or pd.isna(fetched_at):
+            st.warning(f"{symbol}: sin feed en vivo (mostrando último cierre histórico).")
+        elif is_stale:
+            st.warning(
+                f"{symbol}: feed en vivo desactualizado — última lectura {format_minutes_ago(fetched_at)} "
+                f"(umbral: {LIVE_STALE_MINUTES} min). Revisa si ingest_live.py sigue corriendo."
+            )
 
 st.divider()
 
@@ -156,8 +267,8 @@ if len(selected) == 1:
 
     st.subheader(f"{symbol} — Precio, volumen y momentum")
     fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.2, 0.25], vertical_spacing=0.04,
-        subplot_titles=("Precio (velas) + medias móviles", "Volumen", "RSI (14)"),
+        rows=4, cols=1, shared_xaxes=True, row_heights=[0.45, 0.15, 0.2, 0.2], vertical_spacing=0.035,
+        subplot_titles=("Precio (velas) + medias móviles", "Volumen", "RSI (14) + ADX (14)", "MACD (12/26/9)"),
     )
     fig.add_trace(
         go.Candlestick(
@@ -182,23 +293,52 @@ if len(selected) == 1:
 
     fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["RSI"], line=dict(color=color, width=2),
                               name="RSI", showlegend=False), row=3, col=1)
+    fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["ADX"], line=dict(color=MUTED, width=1.5, dash="dot"),
+                              name="ADX", showlegend=False), row=3, col=1)
     fig.add_hline(y=70, line=dict(color=BAD, width=1, dash="dot"), row=3, col=1)
     fig.add_hline(y=30, line=dict(color=GOOD, width=1, dash="dot"), row=3, col=1)
+    fig.add_hline(y=25, line=dict(color=MUTED, width=1, dash="dot"), row=3, col=1)  # ADX >= 25: tendencia fuerte
 
-    fig.update_layout(height=760, xaxis3_rangeslider_visible=False, xaxis_rangeslider_visible=False, **PLOTLY_LAYOUT)
+    macd_hist = sdf["MACD"] - sdf["Signal"]
+    fig.add_trace(go.Bar(x=sdf["date"], y=macd_hist,
+                          marker_color=np.where(macd_hist >= 0, GOOD, BAD), opacity=0.5,
+                          name="MACD - Señal", showlegend=False), row=4, col=1)
+    fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["MACD"], line=dict(color=color, width=1.5),
+                              name="MACD", showlegend=False), row=4, col=1)
+    fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["Signal"], line=dict(color=MUTED, width=1.5, dash="dash"),
+                              name="Señal", showlegend=False), row=4, col=1)
+
+    add_backfill_shading(fig, sdf, row=1)
+    add_gap_shading(fig, sdf["date"], sdf["close"].isna(), row=1)
+
+    fig.update_layout(height=940, xaxis4_rangeslider_visible=False, xaxis_rangeslider_visible=False, **PLOTLY_LAYOUT)
     fig.update_yaxes(gridcolor=GRID, row=1, col=1)
     fig.update_yaxes(gridcolor=GRID, row=2, col=1)
     fig.update_yaxes(gridcolor=GRID, range=[0, 100], row=3, col=1)
+    fig.update_yaxes(gridcolor=GRID, row=4, col=1)
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "ADX ≥ 25 (línea punteada gris en el panel RSI) se lee como tendencia con fuerza; "
+        "por debajo, mercado sin tendencia clara. ATR (referencia de stops) está en la tarjeta KPI de arriba."
+    )
 
 else:
     st.subheader("Comparación de desempeño (base 100) y volumen")
     fig = go.Figure()
     for symbol in selected:
         sdf = df[df["symbol"] == symbol].sort_values("date")
-        base = sdf["close"].iloc[0]
+        base = sdf.loc[sdf["close"].notna(), "close"].iloc[0]
         indexed = sdf["close"] / base * 100
         fig.add_trace(go.Scatter(x=sdf["date"], y=indexed, name=symbol, line=dict(color=COLORS.get(symbol), width=2)))
+
+    # Hueco compartido: fechas sin dato para NINGUNO de los activos seleccionados
+    # (ver reindex_full_calendar en transform.py) -- una sola línea puede
+    # cortarse por su propio hueco, pero esto marca cuándo el pipeline entero
+    # se queda sin fuente.
+    close_pivot = df.pivot(index="date", columns="symbol", values="close")[selected]
+    shared_gap = close_pivot.isna().all(axis=1).reset_index(drop=True)
+    add_gap_shading(fig, close_pivot.index.to_series().reset_index(drop=True), shared_gap, row=1)
+
     fig.update_layout(height=420, yaxis_title="Índice (inicio del rango = 100)", **PLOTLY_LAYOUT)
     fig.update_yaxes(gridcolor=GRID)
     st.plotly_chart(fig, use_container_width=True)
