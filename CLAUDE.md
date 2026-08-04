@@ -126,10 +126,29 @@ tweaking `THEMES`, verify contrast against the background for that mode
 specifically (aim for >=4.5:1 for text-bearing colors).
 
 **Deployment.** `deploy/AWS_DEPLOY.md` is the authoritative, step-by-step
-AWS setup (S3 bucket, IAM role, EC2 launch, security group). The systemd
+AWS setup (S3 bucket, IAM role, EC2 launch, security group), including how
+to stop/restart the EC2 instance without losing anything and how to
+recreate it from scratch if it's ever terminated — read that file for the
+operational runbook rather than duplicating it here. The systemd
 units in `deploy/` encode the intended split: `streamlit.service` runs the
 dashboard continuously; `crypto-live.timer` fires `crypto-live.service`
 every 15 minutes, which chains `ingest_live.py` -> `backfill_recent.py` ->
 `transform.py`, each with `--upload-s3`. `deploy/bootstrap_ec2.sh` installs
-and wires up both. If you change the ingestion chain's order or add a
-script to it, update `deploy/crypto-live.service` to match.
+and wires up both, including Nginx as a reverse proxy (`deploy/nginx_cryptopulse.conf`,
+port 80 -> Streamlit's 127.0.0.1:8501). This deployment has no domain/HTTPS
+(that step in `AWS_DEPLOY.md` is optional and intentionally skipped) — the
+dashboard is served in plain HTTP on the instance's public IP. If you
+change the ingestion chain's order or add a script to it, update
+`deploy/crypto-live.service` to match.
+
+**Nginx gotcha on Amazon Linux 2023.** The stock `/etc/nginx/nginx.conf`
+ships its own catch-all `server { listen 80; server_name _; }` block
+serving `/usr/share/nginx/html`. Since it's parsed before the
+`conf.d/*.conf` include, it silently wins as the implicit default and
+serves nginx's "Welcome" page instead of proxying to Streamlit — curl still
+returns `200 OK`, so this doesn't look like a failure at a glance,
+only a suspiciously small/static response. `deploy/nginx_cryptopulse.conf`
+works around it with an explicit `listen 80 default_server;` on our vhost,
+so no edits to the stock `nginx.conf` are needed. If Nginx ever serves the
+default page again after a fresh bootstrap, check that `default_server` is
+still present in that file before assuming something else broke.

@@ -150,11 +150,70 @@ sudo certbot --nginx -d tu-dominio.com
 
 Certbot (Let's Encrypt) es gratuito y renueva automáticamente el certificado.
 
-## Operación y costos
+## Apagar la instancia (sin perder nada)
 
-- **Apagar la instancia** cuando no se esté usando (ej. fuera del período de
-  evaluación) evita agotar las 750 h/mes del Free Tier si tienes otras
-  instancias corriendo en paralelo.
+Cuando no vayas a usar el dashboard (ej. fuera del período de evaluación),
+apaga la instancia para no gastar horas del Free Tier (750 h/mes):
+
+1. Consola AWS → **EC2** → **Instances** → selecciona `cryptopulse-dashboard`.
+2. **Instance state** → **Stop instance**.
+
+Qué se conserva y qué no:
+- El disco (EBS) persiste completo: el código, el venv, la configuración de
+  Nginx/systemd y los datos locales siguen ahí intactos al reiniciar. Nada
+  que reinstalar ni reconfigurar.
+- Los datos "de verdad" (histórico + KPIs) igual están en S3, independientes
+  del ciclo de vida de la instancia.
+- **Si NO asignaste una Elastic IP**, la IP pública se libera al apagar y
+  la instancia recibe una **IP nueva** la próxima vez que la enciendas.
+- Detener la instancia **no** cobra horas de cómputo del Free Tier; el
+  almacenamiento EBS (unos 8-10 GB) sí sigue existiendo pero cae dentro de
+  los 30 GB gratis del Free Tier, sin costo aparte.
+
+## Volver a encender la instancia
+
+1. Consola AWS → **EC2** → **Instances** → `cryptopulse-dashboard` →
+   **Instance state** → **Start instance**. Espera a que pase a "Running"
+   (uno o dos minutos).
+2. Anota la **IP pública** nueva (columna "Public IPv4 address") — cambia
+   respecto a la sesión anterior si no usas Elastic IP.
+3. **No hace falta volver a correr `bootstrap_ec2.sh`.** Los servicios ya
+   quedaron registrados con `enable --now` en el Paso 7, así que arrancan
+   solos con la máquina:
+   - `streamlit.service` (`WantedBy=multi-user.target`) se levanta con el
+     boot.
+   - `crypto-live.timer` (`OnBootSec=2min`) dispara la primera actualización
+     de datos 2 minutos después del boot, y luego cada 15 min como siempre.
+4. Verifica igual que en el Paso 8 original:
+   ```bash
+   ssh -i cryptopulse-key.pem ec2-user@<IP-PUBLICA-NUEVA>
+   sudo systemctl status streamlit
+   sudo systemctl status crypto-live.timer
+   curl -I http://localhost
+   ```
+5. Abre `http://<IP-PUBLICA-NUEVA>` en el navegador.
+
+**Si el SSH del paso 4 no conecta**, revisa dos cosas antes de asumir que
+algo se rompió:
+- Tu propia IP pública puede haber cambiado desde la última vez — actualiza
+  la regla "SSH (22) → My IP" del Security Group si es necesario (ver
+  sección de IP en la guía de arriba).
+- Confirma que copiaste bien la IP pública **nueva** de la instancia, no la
+  anterior.
+
+## Recrear la instancia desde cero (si la borraste/terminaste)
+
+Si en vez de "Stop" hiciste "Terminate" (o el free tier expiró y creas una
+instancia nueva), el disco EBS anterior desaparece — hay que rehacer el
+Paso 3 en adelante (lanzar EC2 nueva con el mismo IAM Role, clonar el repo,
+correr `bootstrap_ec2.sh`). **No** hace falta repetir el Paso 6
+(`ingest_historical.py --upload-s3`) — el histórico ya vive en S3 y no
+depende de la instancia; la EC2 nueva solo necesita `backfill_recent.py` +
+`transform.py` (los dispara el timer automáticamente) para ponerse al día
+con lo que falte.
+
+## Operación y mantenimiento
+
 - Los logs de cada corrida del feed en vivo se ven con
   `journalctl -u crypto-live.service -f`.
 - Para actualizar el código: `git pull` (o `scp` de nuevo) dentro de
@@ -163,3 +222,7 @@ Certbot (Let's Encrypt) es gratuito y renueva automáticamente el certificado.
   `systemctl status`, del dashboard cargando en el navegador con la IP
   pública, y de los objetos `raw/`, `processed/`, `live/` poblados en el
   bucket S3 (consola AWS).
+- Este despliegue no usa dominio propio ni HTTPS (Paso 9 es opcional y no se
+  aplicó) — el dashboard se sirve en HTTP plano sobre la IP pública. Es
+  suficiente para efectos del trabajo; si más adelante quieres agregar un
+  dominio, la sección de arriba sigue siendo válida.
